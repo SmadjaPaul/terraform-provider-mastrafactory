@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -22,11 +23,19 @@ func canonicalOrigin(raw string) string {
 	if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
 		return ""
 	}
-	scheme, host, port := strings.ToLower(u.Scheme), strings.ToLower(u.Hostname()), u.Port()
+	scheme, host, port := strings.ToLower(u.Scheme), strings.TrimSuffix(strings.ToLower(u.Hostname()), "."), u.Port()
 	if port == "" || (scheme == "https" && port == "443") || (scheme == "http" && port == "80") {
 		return scheme + "://" + host
 	}
 	return scheme + "://" + host + ":" + port
+}
+
+func canonicalProjectID(raw string) string {
+	value := strings.ToLower(strings.TrimSpace(raw))
+	if !regexp.MustCompile(`^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$`).MatchString(value) {
+		return ""
+	}
+	return value
 }
 
 func acceptanceValues(t *testing.T) (endpoint, project, skill string) {
@@ -47,7 +56,8 @@ func acceptanceValues(t *testing.T) (endpoint, project, skill string) {
 		t.Fatal("acceptance endpoint, protected production endpoint and project, disposable endpoint and project UUID, and existing skill name are required")
 	}
 	acceptanceOrigin, productionOrigin, disposableOrigin := canonicalOrigin(endpoint), canonicalOrigin(productionEndpoint), canonicalOrigin(disposableEndpoint)
-	if acceptanceOrigin == "" || productionOrigin == "" || disposableOrigin == "" {
+	acceptanceProject, productionProjectID := canonicalProjectID(project), canonicalProjectID(productionProject)
+	if acceptanceOrigin == "" || productionOrigin == "" || disposableOrigin == "" || acceptanceProject == "" || productionProjectID == "" {
 		t.Fatal("acceptance and production endpoints must be valid HTTP(S) origins without paths, query, or user info")
 	}
 	if acceptanceOrigin == productionOrigin {
@@ -56,7 +66,7 @@ func acceptanceValues(t *testing.T) (endpoint, project, skill string) {
 	if acceptanceOrigin != disposableOrigin || canonicalOrigin(os.Getenv("MASTRAFACTORY_TRUSTED_ENDPOINT")) != disposableOrigin {
 		t.Fatal("acceptance endpoint must match the independently runner-pinned disposable endpoint")
 	}
-	if project == productionProject {
+	if acceptanceProject == productionProjectID {
 		t.Fatal("refusing to run acceptance tests against the production Factory project")
 	}
 	return endpoint, project, skill
@@ -139,6 +149,15 @@ resource "mastrafactory_skill_override" "test" {
 func TestAcceptanceOriginNormalization(t *testing.T) {
 	if canonicalOrigin("https://factory.example/") != canonicalOrigin("https://factory.example") {
 		t.Fatal("trailing slash must not bypass production endpoint comparison")
+	}
+	if canonicalOrigin("https://FACTORY.EXAMPLE.") != canonicalOrigin("https://factory.example") {
+		t.Fatal("case or trailing DNS dot must not bypass production endpoint comparison")
+	}
+	if canonicalProjectID("AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE") != canonicalProjectID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee") {
+		t.Fatal("UUID case must not bypass the production project comparison")
+	}
+	if canonicalProjectID("not-a-project-id") != "" {
+		t.Fatal("invalid project ID must fail closed")
 	}
 	for _, invalid := range []string{"https://factory.example/path", "https://user:pass@factory.example", "https://factory.example/?x=1", "not a URL"} {
 		if canonicalOrigin(invalid) != "" {

@@ -17,6 +17,7 @@ const acceptanceTestProjectID = "00000000-0000-4000-8000-000000000001"
 
 func TestCreatePreservesIdentityForAmbiguousWriteAndReadReconciles(t *testing.T) {
 	var committed bool
+	var puts int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
@@ -32,8 +33,19 @@ func TestCreatePreservesIdentityForAmbiguousWriteAndReadReconciles(t *testing.T)
 				"origin": "code", "edited": edited,
 			}}})
 		case r.Method == http.MethodPut:
+			puts++
 			committed = true
-			http.Error(w, "lost response", http.StatusUnprocessableEntity)
+			hijacker, ok := w.(http.Hijacker)
+			if !ok {
+				t.Error("test server does not support a dropped response")
+				return
+			}
+			conn, _, err := hijacker.Hijack()
+			if err != nil {
+				t.Errorf("hijack response: %v", err)
+				return
+			}
+			_ = conn.Close() // Simulate the server committing before the client loses its response.
 		default:
 			http.NotFound(w, r)
 		}
@@ -75,13 +87,15 @@ func TestCreatePreservesIdentityForAmbiguousWriteAndReadReconciles(t *testing.T)
 		t.Fatalf("provisional identity missing after failed create: %q", afterCreate.ID.ValueString())
 	}
 
-	// Even if OpenTofu discarded partial state after the failed response, a
-	// later Create adopts only the exact planned content instead of writing a
-	// second time or leaving an unmanaged override behind.
+	// If OpenTofu discarded partial state, a retry must refuse the pre-existing
+	// override rather than adopt an indistinguishable operator-owned value.
 	retryResponse := resource.CreateResponse{State: tfsdk.State{Raw: planRaw, Schema: schemaResponse.Schema}}
 	r.Create(context.Background(), req, &retryResponse)
-	if retryResponse.Diagnostics.HasError() {
-		t.Fatalf("exact remote match was not reconciled on retry: %v", retryResponse.Diagnostics)
+	if !retryResponse.Diagnostics.HasError() {
+		t.Fatal("retry adopted a remote override whose ownership cannot be proven")
+	}
+	if puts != 1 {
+		t.Fatalf("retry issued a duplicate PUT: got %d writes", puts)
 	}
 
 	readResponse := resource.ReadResponse{State: retryResponse.State}
