@@ -1,0 +1,12 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":rebaseStalePrs"],
+  "dependencyDashboard": true,
+  "automerge": false,
+  "platformAutomerge": false,
+  "timezone": "Europe/Paris",
+  "packageRules": [
+    { "matchManagers": ["gomod"], "automerge": false },
+    { "matchManagers": ["github-actions"], "automerge": false }
+  ]
+}
