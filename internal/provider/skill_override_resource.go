@@ -77,7 +77,16 @@ func (r *SkillOverrideResource) Create(ctx context.Context, req resource.CreateR
 		return
 	}
 	if remote.Edited != nil {
-		resp.Diagnostics.AddError("Skill override already exists", "An override exists for this project and skill. Import it instead of overwriting unmanaged configuration.")
+		if !sameText(remote.Description, m.Description.ValueString()) || !sameText(remote.Content, m.Instructions.ValueString()) {
+			resp.Diagnostics.AddError("Skill override already exists", "An override exists for this project and skill with different content. Import and review it instead of overwriting unmanaged configuration.")
+			return
+		}
+		// A previous Create may have reached the API even if its response was
+		// lost. Adopt only an exact semantic match with the planned content.
+		m.ID = types.StringValue(skillIdentity(project, name))
+		m.Origin = types.StringValue(remote.Origin)
+		m.OriginalChanged = types.BoolValue(remote.OriginalChanged)
+		resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
 		return
 	}
 	// Persist the planned identity before the network write. If the API applies
