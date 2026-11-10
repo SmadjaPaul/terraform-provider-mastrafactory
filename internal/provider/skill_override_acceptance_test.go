@@ -30,6 +30,14 @@ func canonicalOrigin(raw string) string {
 	return scheme + "://" + host + ":" + port
 }
 
+// matchesPinnedEndpoint mirrors the endpoint comparison used by client.New.
+func matchesPinnedEndpoint(endpoint, trustedEndpoint string) bool {
+	configured, configuredErr := url.Parse(strings.TrimSpace(endpoint))
+	trusted, trustedErr := url.Parse(strings.TrimSpace(trustedEndpoint))
+	return configuredErr == nil && trustedErr == nil && configured != nil && trusted != nil &&
+		configured.Scheme == trusted.Scheme && strings.EqualFold(configured.Host, trusted.Host)
+}
+
 func canonicalProjectID(raw string) string {
 	value := strings.ToLower(strings.TrimSpace(raw))
 	if !regexp.MustCompile(`^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$`).MatchString(value) {
@@ -63,7 +71,8 @@ func acceptanceValues(t *testing.T) (endpoint, project, skill string) {
 	if acceptanceOrigin == productionOrigin {
 		t.Fatal("refusing to run acceptance tests against the production Factory endpoint")
 	}
-	if acceptanceOrigin != disposableOrigin || canonicalOrigin(os.Getenv("MASTRAFACTORY_TRUSTED_ENDPOINT")) != disposableOrigin {
+	trustedEndpoint := os.Getenv("MASTRAFACTORY_TRUSTED_ENDPOINT")
+	if acceptanceOrigin != disposableOrigin || canonicalOrigin(trustedEndpoint) != disposableOrigin || !matchesPinnedEndpoint(endpoint, trustedEndpoint) {
 		t.Fatal("acceptance endpoint must match the independently runner-pinned disposable endpoint")
 	}
 	if acceptanceProject == productionProjectID {
@@ -162,6 +171,20 @@ func TestAcceptanceOriginNormalization(t *testing.T) {
 	for _, invalid := range []string{"https://factory.example/path", "https://user:pass@factory.example", "https://factory.example/?x=1", "not a URL"} {
 		if canonicalOrigin(invalid) != "" {
 			t.Errorf("accepted non-origin endpoint %q", invalid)
+		}
+	}
+}
+
+func TestAcceptanceEndpointPinMatchesClientSemantics(t *testing.T) {
+	if !matchesPinnedEndpoint("https://factory.example", "https://factory.example") {
+		t.Fatal("identical endpoint and pin must match")
+	}
+	for _, pair := range [][2]string{
+		{"https://factory.example:443", "https://factory.example"},
+		{"https://factory.example.", "https://factory.example"},
+	} {
+		if matchesPinnedEndpoint(pair[0], pair[1]) {
+			t.Errorf("endpoint %q unexpectedly matched pin %q", pair[0], pair[1])
 		}
 	}
 }

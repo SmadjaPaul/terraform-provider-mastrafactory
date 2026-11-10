@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/SmadjaPaul/terraform-provider-mastrafactory/internal/client"
@@ -16,15 +17,19 @@ import (
 const acceptanceTestProjectID = "00000000-0000-4000-8000-000000000001"
 
 func TestCreatePreservesIdentityForAmbiguousWriteAndReadReconciles(t *testing.T) {
+	var mu sync.Mutex
 	var committed bool
 	var puts int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/web/factory/skills":
+			mu.Lock()
+			wasCommitted := committed
+			mu.Unlock()
 			edited := any(nil)
 			description, content := "Upstream plan", "Upstream instructions"
-			if committed {
+			if wasCommitted {
 				edited = map[string]string{"updatedAt": "2026-11-10T00:00:00Z"}
 				description, content = "Plan", "Instructions"
 			}
@@ -33,8 +38,10 @@ func TestCreatePreservesIdentityForAmbiguousWriteAndReadReconciles(t *testing.T)
 				"origin": "code", "edited": edited,
 			}}})
 		case r.Method == http.MethodPut:
+			mu.Lock()
 			puts++
 			committed = true
+			mu.Unlock()
 			hijacker, ok := w.(http.Hijacker)
 			if !ok {
 				t.Error("test server does not support a dropped response")
@@ -94,8 +101,11 @@ func TestCreatePreservesIdentityForAmbiguousWriteAndReadReconciles(t *testing.T)
 	if !retryResponse.Diagnostics.HasError() {
 		t.Fatal("retry adopted a remote override whose ownership cannot be proven")
 	}
-	if puts != 1 {
-		t.Fatalf("retry issued a duplicate PUT: got %d writes", puts)
+	mu.Lock()
+	putCount := puts
+	mu.Unlock()
+	if putCount != 1 {
+		t.Fatalf("retry issued a duplicate PUT: got %d writes", putCount)
 	}
 
 	readResponse := resource.ReadResponse{State: retryResponse.State}
