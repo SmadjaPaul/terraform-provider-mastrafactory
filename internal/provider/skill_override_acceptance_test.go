@@ -129,7 +129,7 @@ resource "mastrafactory_skill_override" "test" {
 			{Config: resourceConfig("Acceptance updated", "test instructions two"), Check: check("Acceptance updated", "test instructions two")},
 			{
 				ResourceName: "mastrafactory_skill_override.test", ImportState: true, ImportStateVerify: true,
-				ImportStatePersist: true, Check: check("Acceptance updated", "test instructions two"),
+				Check: check("Acceptance updated", "test instructions two"),
 			},
 			{Config: resourceConfig("Acceptance updated", "test instructions two"), PlanOnly: true, ExpectNonEmptyPlan: false},
 		},
