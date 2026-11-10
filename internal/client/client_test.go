@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 const projectID = "00000000-0000-4000-8000-000000000001"
@@ -200,6 +202,58 @@ func TestClientRoundTrip(t *testing.T) {
 	defer mu.Unlock()
 	if authCalls != 1 || readCalls != count+2 || putCalls != 2 || deleteCalls != 1 || boardCalls != 1 {
 		t.Fatalf("unexpected call counts sign=%d read=%d put=%d del=%d board=%d", authCalls, readCalls, putCalls, deleteCalls, boardCalls)
+	}
+}
+
+func TestInternalServiceEndpointUsesPublicBetterAuthOrigin(t *testing.T) {
+	const internalEndpoint = "http://mastra-factory.mastra-factory.svc.cluster.local:4111"
+	const publicOrigin = "https://factory.smadja.dev"
+	var signedIn, read bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host != "mastra-factory.mastra-factory.svc.cluster.local:4111" {
+			t.Errorf("request used unexpected host %q", r.Host)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/auth/api/sign-in/email" {
+			signedIn = true
+			if r.Header.Get("Origin") != publicOrigin {
+				t.Errorf("Better Auth received Origin %q", r.Header.Get("Origin"))
+				http.Error(w, "origin", http.StatusForbidden)
+				return
+			}
+			_, _ = w.Write([]byte(`{"token":"test-session"}`))
+			return
+		}
+		if r.URL.Path == "/web/factory/skills" {
+			read = true
+			if r.Header.Get("Authorization") != "Bearer test-session" {
+				t.Errorf("Factory request did not carry the returned session")
+				http.Error(w, "auth", http.StatusUnauthorized)
+				return
+			}
+			_, _ = w.Write([]byte(`{"skills":[{"name":"factory-plan","description":"Plan","content":"Submit","origin":"code"}]}`))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	transport := &http.Transport{DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, strings.TrimPrefix(server.URL, "http://"))
+	}}
+	clientHTTP := &http.Client{Transport: transport, Timeout: 5 * time.Second}
+	c, err := New(Config{
+		Endpoint: internalEndpoint, TrustedEndpoint: internalEndpoint, AuthOrigin: publicOrigin,
+		Email: "operator@example.invalid", Password: "test-only", HTTPClient: clientHTTP,
+	})
+	if err != nil {
+		t.Fatalf("internal service endpoint with public Origin was rejected: %v", err)
+	}
+	skill, err := c.Skill(context.Background(), projectID, "factory-plan")
+	if err != nil || skill.Name != "factory-plan" {
+		t.Fatalf("authenticated internal service read failed: skill=%+v err=%v", skill, err)
+	}
+	if !signedIn || !read {
+		t.Fatalf("expected sign-in and API read, got sign-in=%v read=%v", signedIn, read)
 	}
 }
 

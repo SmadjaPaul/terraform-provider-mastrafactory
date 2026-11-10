@@ -77,7 +77,7 @@ func (r *SkillOverrideResource) Create(ctx context.Context, req resource.CreateR
 		return
 	}
 	if remote.Edited != nil {
-		resp.Diagnostics.AddError("Skill override already exists", "An override exists for this project and skill. Import it instead of overwriting unmanaged configuration.")
+		resp.Diagnostics.AddError("Skill override already exists", "An override exists for this project and skill. Import it instead of overwriting or adopting unmanaged configuration.")
 		return
 	}
 	// Persist the planned identity before the network write. If the API applies
